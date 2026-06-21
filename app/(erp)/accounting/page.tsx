@@ -3,13 +3,15 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/lib/format';
-import { DollarSign, CreditCard, TrendingUp, TrendingDown, ChartBar as BarChart3 } from 'lucide-react';
+import { toast } from '@/hooks/use-toast';
+import { DollarSign, CreditCard, TrendingUp, TrendingDown, ChartBar as BarChart3, Plus, X } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import type { Account } from '@/lib/types';
 
 export default function AccountingPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
+  const [monthlyData, setMonthlyData] = useState<{ month: string; income: number; expense: number }[]>([]);
 
   useEffect(() => { loadData(); }, []);
 
@@ -30,10 +32,6 @@ export default function AccountingPage() {
   const totalRevenue = revenue.reduce((s, a) => s + Number(a.balance), 0);
   const totalExpenses = expenses.reduce((s, a) => s + Number(a.balance), 0);
   const netProfit = totalRevenue - totalExpenses;
-  const equity = totalAssets - totalLiabilities;
-
-  // Group revenue/expense by month for chart (using last 6 months from journal entries)
-  const [monthlyData, setMonthlyData] = useState<{ month: string; income: number; expense: number }[]>([]);
 
   useEffect(() => {
     async function loadMonthlyData() {
@@ -43,7 +41,7 @@ export default function AccountingPage() {
 
       const { data: entries } = await supabase
         .from('journal_entries')
-        .select('entry_date, total_debit, total_credit, lines:journal_lines(account:accounts(account_type))')
+        .select('entry_date, total_debit, total_credit, reference_type')
         .gte('entry_date', sixMonthsAgo.toISOString().split('T')[0])
         .order('entry_date');
 
@@ -56,23 +54,16 @@ export default function AccountingPage() {
         const date = new Date(entry.entry_date);
         const monthKey = monthNames[date.getMonth()];
 
-        // Simplified: use reference to determine if income or expense
-        // Revenue entries credit revenue accounts, expense entries debit expense accounts
         if (!monthMap.has(monthKey)) {
           monthMap.set(monthKey, { income: 0, expense: 0 });
         }
 
         const monthData = monthMap.get(monthKey)!;
-        // For simplicity, credit to revenue accounts is income
-        // Debit to expense accounts is expense
         if (entry.reference_type === 'invoice') {
           monthData.income += Number(entry.total_credit);
-        } else if (entry.reference_type === 'payment') {
-          // Payment is just moving between accounts, not revenue
         }
       });
 
-      // If no data, show placeholder
       if (monthMap.size === 0) {
         setMonthlyData([
           { month: 'Jan', income: 0, expense: 0 },
@@ -107,6 +98,9 @@ export default function AccountingPage() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">Accounting</h1>
           <p className="text-muted-foreground text-sm mt-0.5">Financial overview with automated double-entry</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <QuickExpenseModal accounts={accounts} onSaved={loadData} />
         </div>
       </div>
 
@@ -169,11 +163,7 @@ export default function AccountingPage() {
             <tbody className="divide-y divide-border">
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>
-                    {Array.from({ length: 4 }).map((_, j) => (
-                      <td key={j} className="px-4 py-3"><div className="h-4 bg-muted rounded animate-pulse" /></td>
-                    ))}
-                  </tr>
+                  <tr key={i}>{Array.from({ length: 4 }).map((_, j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-muted rounded animate-pulse" /></td>)}</tr>
                 ))
               ) : accounts.length === 0 ? (
                 <tr>
@@ -212,5 +202,148 @@ export default function AccountingPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function QuickExpenseModal({ accounts, onSaved }: { accounts: Account[]; onSaved: () => void }) {
+  const [show, setShow] = useState(false);
+  const [form, setForm] = useState({
+    date: new Date().toISOString().split('T')[0],
+    amount: '',
+    expense_account: '',
+    paid_from: '',
+    description: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const expenseAccounts = accounts.filter(a => a.account_type === 'expense');
+  const cashBankAccounts = accounts.filter(a => a.is_cash || a.is_bank || a.code === '1000' || a.code === '1010');
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+
+    if (!form.expense_account || !form.paid_from || !form.amount || parseFloat(form.amount) <= 0) {
+      setError('Please fill all required fields');
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const amount = parseFloat(form.amount);
+      const entryNumber = await supabase.rpc('get_next_journal_number');
+
+      const { data: entry } = await supabase
+        .from('journal_entries')
+        .insert({
+          entry_number: entryNumber.data || `JE-${Date.now().toString().slice(-6)}`,
+          entry_date: form.date,
+          description: form.description || 'Expense payment',
+          reference_type: 'manual',
+          total_debit: amount,
+          total_credit: amount,
+          is_posted: true,
+        })
+        .select()
+        .single();
+
+      if (!entry) throw new Error('Failed to create entry');
+
+      // Create journal lines
+      await supabase.from('journal_lines').insert([
+        { journal_entry_id: entry.id, account_id: form.expense_account, description: form.description, debit: amount, credit: 0, sort_order: 0 },
+        { journal_entry_id: entry.id, account_id: form.paid_from, description: form.description, debit: 0, credit: amount, sort_order: 1 },
+      ]);
+
+      // Update account balances
+      const expenseAccount = accounts.find(a => a.id === form.expense_account);
+      const cashAccount = accounts.find(a => a.id === form.paid_from);
+
+      if (expenseAccount) {
+        await supabase.from('accounts').update({ balance: (expenseAccount.balance || 0) + amount }).eq('id', form.expense_account);
+      }
+      if (cashAccount) {
+        await supabase.from('accounts').update({ balance: (cashAccount.balance || 0) - amount }).eq('id', form.paid_from);
+      }
+
+      toast({ title: 'Success', description: 'Expense recorded successfully' });
+      setForm({ date: new Date().toISOString().split('T')[0], amount: '', expense_account: '', paid_from: '', description: '' });
+      setShow(false);
+      onSaved();
+    } catch (err: any) {
+      setError(err.message || 'Failed to record expense');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setShow(true)}
+        className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition"
+      >
+        <Plus className="w-4 h-4" />Record Expense
+      </button>
+      {show && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+              <h2 className="text-base font-bold">Quick Expense Entry</h2>
+              <button onClick={() => setShow(false)} className="text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              {error && <div className="p-3 bg-red-50 text-red-600 rounded-lg text-sm">{error}</div>}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium mb-1">Date</label>
+                  <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} className="w-full border border-border rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1">Amount *</label>
+                  <input type="number" required value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="0" className="w-full border border-border rounded-lg px-3 py-2 text-sm" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium mb-1">Expense Type *</label>
+                <select required value={form.expense_account} onChange={e => setForm({ ...form, expense_account: e.target.value })} className="w-full border border-border rounded-lg px-3 py-2 text-sm">
+                  <option value="">Select expense category</option>
+                  {expenseAccounts.map(a => (
+                    <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+                  ))}
+                  <option value="create_new">+ Add New Expense Account</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium mb-1">Paid From *</label>
+                <select required value={form.paid_from} onChange={e => setForm({ ...form, paid_from: e.target.value })} className="w-full border border-border rounded-lg px-3 py-2 text-sm">
+                  <option value="">Select cash/bank account</option>
+                  {cashBankAccounts.map(a => (
+                    <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium mb-1">Description</label>
+                <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="e.g. Office supplies, Rent payment" className="w-full border border-border rounded-lg px-3 py-2 text-sm" />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => setShow(false)} className="flex-1 px-4 py-2 border border-border rounded-lg text-sm hover:bg-muted transition">Cancel</button>
+                <button type="submit" disabled={saving} className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition disabled:opacity-60">
+                  {saving ? 'Saving...' : 'Record Expense'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

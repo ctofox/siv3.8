@@ -64,6 +64,7 @@ const navItems: NavItem[] = [
       { title: 'Journal Entries', href: '/accounting/journal' },
     ],
   },
+  { title: 'Expenses', href: '/expenses', icon: Receipt },
   { title: 'Online Store', href: '/online-store', icon: Store, badge: 'New' },
   { title: 'Employees', href: '/employees', icon: UserRound },
   {
