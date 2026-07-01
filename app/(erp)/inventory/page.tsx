@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/lib/format';
 import { toast } from '@/hooks/use-toast';
 import JsBarcode from 'jsbarcode';
-import { Package, Plus, Search, CreditCard as Edit, Trash2, TriangleAlert as AlertTriangle, ChartBar as BarChart3, Boxes, TrendingDown, RefreshCw, X, Warehouse, Palette, Ruler, ChevronDown, ChevronUp, ChevronRight, Info, Settings, Barcode, Camera, Printer, Download, Upload } from 'lucide-react';
+import { Package, Plus, Search, CreditCard as Edit, Trash2, TriangleAlert as AlertTriangle, ChartBar as BarChart3, Boxes, TrendingDown, RefreshCw, X, Warehouse, Palette, Ruler, ChevronDown, ChevronUp, ChevronRight, Info, Settings, Barcode, Camera, Printer, Download, Upload, CircleCheck as CheckCircle2 } from 'lucide-react';
 import type { Product, Category, Brand, Warehouse as WarehouseType, ProductColor, ProductSize, ProductUnit } from '@/lib/types';
 
 function StockByWarehouse({ productId, warehouses, inventoryByWarehouse }: { productId: string; warehouses: WarehouseType[]; inventoryByWarehouse: Record<string, Record<string, number>> }) {
@@ -55,8 +55,8 @@ export default function InventoryPage() {
   const [deletingProduct, setDeletingProduct] = useState<ProductWithStock | null>(null);
   const [barcodeProduct, setBarcodeProduct] = useState<ProductWithStock | null>(null);
   const [showManageModal, setShowManageModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [stats, setStats] = useState({ total: 0, lowStock: 0, outOfStock: 0, value: 0 });
-  const importFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { loadData(); }, []);
 
@@ -158,87 +158,6 @@ export default function InventoryPage() {
     toast({ title: 'Exported', description: `${rows.length} products exported to Excel` });
   }
 
-  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
-        const wb = XLSX.read(data, { type: 'array' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows: any[] = XLSX.utils.sheet_to_json(ws);
-
-        if (rows.length === 0) { toast({ title: 'Empty file', description: 'No rows found in the spreadsheet', variant: 'destructive' }); return; }
-
-        let imported = 0, skipped = 0;
-        const sectionHeaders = ['suzan metal', 'rosa metal', 'astra metal', 'products name', 'sanitary ware', 'metal'];
-
-        for (const row of rows) {
-          const name = row['Name'] || row['name'] || row['__EMPTY'] || row['__EMPTY_2'];
-          const sku = row['SKU'] || row['sku'] || row['__EMPTY_1'] || row['__EMPTY_3'];
-
-          if (!name || !sku) { skipped++; continue; }
-
-          const nameStr = String(name).trim();
-          const skuStr = String(sku).trim();
-
-          if (sectionHeaders.some(h => nameStr.toLowerCase() === h || skuStr.toLowerCase().includes(h.toLowerCase()))) { skipped++; continue; }
-          if (!/^[A-Za-z0-9]/.test(skuStr)) { skipped++; continue; }
-
-          const catName = row['Category'] || row['category'];
-          const brandName = row['Brand'] || row['brand'];
-
-          let category_id = null;
-          if (catName) {
-            const cat = categories.find(c => c.name.toLowerCase() === String(catName).toLowerCase());
-            category_id = cat?.id || null;
-          }
-          let brand_id = null;
-          if (brandName) {
-            const br = brands.find(b => b.name.toLowerCase() === String(brandName).toLowerCase());
-            brand_id = br?.id || null;
-          }
-
-          const { data: productData, error } = await supabase.from('products').upsert({
-            name: nameStr,
-            sku: skuStr,
-            unit: String(row['Unit'] || row['unit'] || 'pcs'),
-            cost_price: Number(row['Cost Price'] || row['cost_price'] || 0),
-            sale_price: Number(row['Sale Price'] || row['sale_price'] || 0),
-            min_stock_level: Number(row['Min Stock Level'] || row['min_stock_level'] || 0),
-            description: String(row['Description'] || row['description'] || ''),
-            category_id,
-            brand_id,
-            is_active: true,
-          }, { onConflict: 'tenant_id,sku' }).select();
-
-          if (!error && productData && productData[0]) {
-            imported++;
-            const currentStock = Number(row['Current Stock'] || row['current_stock'] || 0);
-            if (currentStock > 0) {
-              await supabase.from('inventory_items').upsert({
-                product_id: productData[0].id,
-                warehouse_id: '33000000-0000-0000-0000-000000000001',
-                quantity_on_hand: currentStock,
-                quantity_reserved: 0,
-              }, { onConflict: 'product_id,warehouse_id' });
-            }
-          } else {
-            skipped++;
-          }
-        }
-        toast({ title: 'Import Complete', description: `${imported} products imported, ${skipped} skipped` });
-        loadData();
-      } catch (err: any) {
-        toast({ title: 'Import Failed', description: err.message || 'Invalid file format', variant: 'destructive' });
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  }
-
   async function handleDelete() {
     if (!deletingProduct) return;
     const { error } = await supabase.from('products').update({ is_active: false }).eq('id', deletingProduct.id);
@@ -274,19 +193,12 @@ export default function InventoryPage() {
             Export
           </button>
           <button
-            onClick={() => importFileRef.current?.click()}
+            onClick={() => setShowImportModal(true)}
             className="flex items-center gap-2 border border-border hover:bg-muted text-foreground px-3 py-2 rounded-lg text-sm font-semibold transition"
           >
             <Upload className="w-4 h-4" />
             Import
           </button>
-          <input
-            ref={importFileRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            className="hidden"
-            onChange={handleImport}
-          />
           <button
             onClick={() => setShowAddModal(true)}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition"
@@ -468,6 +380,16 @@ export default function InventoryPage() {
       )}
       {showManageModal && (
         <ManageCatalogModal categories={categories} brands={brands} onClose={() => setShowManageModal(false)} onSaved={loadData} />
+      )}
+      {showImportModal && (
+        <ImportModal
+          categories={categories}
+          brands={brands}
+          warehouses={warehouses}
+          existingSkus={products.map(p => p.sku)}
+          onClose={() => setShowImportModal(false)}
+          onImported={loadData}
+        />
       )}
     </div>
   );
@@ -1047,6 +969,530 @@ function DeleteConfirmModal({ product, onClose, onConfirm }: { product: ProductW
             <button onClick={onClose} className="flex-1 px-4 py-2 border border-border rounded-lg text-sm hover:bg-muted transition">Cancel</button>
             <button onClick={onConfirm} className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold transition">Delete</button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportModal({ categories, brands, warehouses, existingSkus, onClose, onImported }: {
+  categories: Category[];
+  brands: Brand[];
+  warehouses: WarehouseType[];
+  existingSkus: string[];
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [activeTab, setActiveTab] = useState<'upload' | 'paste' | 'guide'>('upload');
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState({ current: 0, total: 0, stage: '' });
+  const [results, setResults] = useState<{ success: number; skipped: number; errors: string[] } | null>(null);
+  const [pasteText, setPasteText] = useState('');
+  const [importMode, setImportMode] = useState<'simple' | 'variants' | 'multiunit'>('simple');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const demoTemplate = `Name,SKU,Category,Brand,Unit,Cost Price,Sale Price,Min Stock Level,Current Stock,Color,Size,Multi-Unit Name,Multi-Unit Conversion,Multi-Unit Sale Price
+Widget A,WID-001,Electronics,TechCorp,pieces,100,150,10,50,Red,Small,,,
+Widget A,WID-002,Electronics,TechCorp,pieces,100,150,10,30,Blue,Small,,,
+Cable Pack,CAB-010,Electrical,PowerCo,box,500,750,5,20,,,,Box,100,50000
+Tiles Premium,TIL-050,Flooring,CeramicCo,sqft,25,45,100,500,,,Carton,20,800`;
+
+  function downloadTemplate() {
+    const blob = new Blob([demoTemplate], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'product_import_template.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  async function handleFileUpload(file: File) {
+    setImporting(true);
+    setResults(null);
+    setProgress({ current: 0, total: 0, stage: 'Reading file...' });
+
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: any[] = XLSX.utils.sheet_to_json(ws);
+
+      if (rows.length === 0) {
+        setResults({ success: 0, skipped: 0, errors: ['No data rows found in file'] });
+        setImporting(false);
+        return;
+      }
+
+      await processImport(rows);
+    } catch (err: any) {
+      setResults({ success: 0, skipped: 0, errors: [err.message || 'Failed to read file'] });
+    }
+    setImporting(false);
+  }
+
+  async function handlePasteImport() {
+    if (!pasteText.trim()) return;
+
+    setImporting(true);
+    setResults(null);
+    setProgress({ current: 0, total: 0, stage: 'Parsing pasted data...' });
+
+    try {
+      const lines = pasteText.trim().split('\n');
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+      const rows = lines.slice(1).map(line => {
+        const values = line.split(',');
+        const row: Record<string, string> = {};
+        headers.forEach((h, i) => row[h] = values[i]?.trim() || '');
+        return row;
+      }).filter(r => r['name'] || r['sku']);
+
+      if (rows.length === 0) {
+        setResults({ success: 0, skipped: 0, errors: ['No valid data rows found'] });
+        setImporting(false);
+        return;
+      }
+
+      await processImport(rows);
+    } catch (err: any) {
+      setResults({ success: 0, skipped: 0, errors: [err.message || 'Failed to parse pasted data'] });
+    }
+    setImporting(false);
+  }
+
+  async function processImport(rows: any[]) {
+    const defaultWarehouse = warehouses.find(w => w.is_default)?.id || warehouses[0]?.id;
+    let success = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    // Group rows by base product (same Name, different variants)
+    const productGroups = new Map<string, any[]>();
+
+    rows.forEach((row, idx) => {
+      const name = row['Name'] || row['name'] || '';
+      const sku = row['SKU'] || row['sku'] || '';
+
+      if (!name && !sku) {
+        skipped++;
+        errors.push(`Row ${idx + 1}: Missing Name and SKU`);
+        return;
+      }
+
+      // For variant mode, group by Name; for simple mode, each row is separate
+      const groupKey = importMode === 'variants' ? (name || sku) : `${name}_${sku}_${idx}`;
+      if (!productGroups.has(groupKey)) productGroups.set(groupKey, []);
+      productGroups.get(groupKey)!.push({ ...row, _rowIndex: idx + 1 });
+    });
+
+    setProgress({ current: 0, total: productGroups.size, stage: 'Importing products...' });
+
+    let current = 0;
+    for (const [, groupRows] of productGroups) {
+      current++;
+      setProgress({ current, total: productGroups.size, stage: `Processing ${current}/${productGroups.size}...` });
+
+      const firstRow = groupRows[0];
+      const name = String(firstRow['Name'] || firstRow['name'] || '').trim();
+      const sku = String(firstRow['SKU'] || firstRow['sku'] || '').trim();
+
+      if (!name || !sku) {
+        skipped += groupRows.length;
+        errors.push(`Row ${firstRow._rowIndex}: Missing Name or SKU`);
+        continue;
+      }
+
+      // Check if SKU exists
+      if (existingSkus.includes(sku)) {
+        skipped += groupRows.length;
+        errors.push(`Row ${firstRow._rowIndex}: SKU ${sku} already exists`);
+        continue;
+      }
+
+      // Find category and brand
+      const catName = firstRow['Category'] || firstRow['category'];
+      const brandName = firstRow['Brand'] || firstRow['brand'];
+      const category = catName ? categories.find(c => c.name.toLowerCase() === String(catName).toLowerCase()) : null;
+      const brand = brandName ? brands.find(b => b.name.toLowerCase() === String(brandName).toLowerCase()) : null;
+
+      // Parse multi-unit data
+      const multiUnitName = firstRow['Multi-Unit Name'] || firstRow['multi_unit_name'] || '';
+      const multiUnitConversion = Number(firstRow['Multi-Unit Conversion'] || firstRow['multi_unit_conversion'] || 1);
+      const multiUnitSalePrice = Number(firstRow['Multi-Unit Sale Price'] || firstRow['multi_unit_sale_price'] || 0);
+
+      const enableMultiUnit = !!multiUnitName && multiUnitConversion > 1;
+      const enableColors = groupRows.some(r => r['Color'] || r['color']);
+      const enableSizes = groupRows.some(r => r['Size'] || r['size']);
+
+      // Create product
+      const { data: productData, error: prodError } = await supabase.from('products').insert({
+        tenant_id: '00000000-0000-0000-0000-000000000001',
+        name,
+        sku,
+        unit: String(firstRow['Unit'] || firstRow['unit'] || 'pcs'),
+        base_unit: String(firstRow['Unit'] || firstRow['unit'] || 'pcs'),
+        cost_price: Number(firstRow['Cost Price'] || firstRow['cost_price'] || 0),
+        sale_price: Number(firstRow['Sale Price'] || firstRow['sale_price'] || 0),
+        min_stock_level: Number(firstRow['Min Stock Level'] || firstRow['min_stock_level'] || 0),
+        description: String(firstRow['Description'] || firstRow['description'] || ''),
+        category_id: category?.id || null,
+        brand_id: brand?.id || null,
+        enable_multi_unit: enableMultiUnit,
+        enable_colors: enableColors,
+        enable_sizes: enableSizes,
+        is_active: true,
+      }).select('id').single();
+
+      if (prodError || !productData) {
+        skipped += groupRows.length;
+        errors.push(`Row ${firstRow._rowIndex}: ${prodError?.message || 'Failed to create product'}`);
+        continue;
+      }
+
+      const productId = productData.id;
+      let productsCreated = 1;
+
+      // Add colors if enabled
+      if (enableColors) {
+        const uniqueColors = new Map<string, { name: string; hex: string }>();
+        groupRows.forEach(r => {
+          const colorName = String(r['Color'] || r['color'] || '').trim();
+          if (colorName) {
+            const colorKey = colorName.toLowerCase();
+            if (!uniqueColors.has(colorKey)) {
+              uniqueColors.set(colorKey, {
+                name: colorName,
+                hex: colorNameToHex(colorName),
+              });
+            }
+          }
+        });
+
+        let colorSort = 0;
+        for (const [, color] of uniqueColors) {
+          await supabase.from('product_colors').insert({
+            product_id: productId,
+            name: color.name,
+            hex_code: color.hex,
+            is_default: colorSort === 0,
+            sort_order: colorSort++,
+          });
+        }
+      }
+
+      // Add sizes if enabled
+      if (enableSizes) {
+        const uniqueSizes = new Map<string, string>();
+        groupRows.forEach(r => {
+          const sizeName = String(r['Size'] || r['size'] || '').trim();
+          if (sizeName && !uniqueSizes.has(sizeName.toLowerCase())) {
+            uniqueSizes.set(sizeName.toLowerCase(), sizeName);
+          }
+        });
+
+        let sizeSort = 0;
+        for (const [, sizeName] of uniqueSizes) {
+          await supabase.from('product_sizes').insert({
+            product_id: productId,
+            name: sizeName,
+            is_default: sizeSort === 0,
+            sort_order: sizeSort++,
+          });
+        }
+      }
+
+      // Add multi-unit data
+      if (enableMultiUnit) {
+        // Base unit
+        await supabase.from('product_units').insert({
+          product_id: productId,
+          unit_name: String(firstRow['Unit'] || firstRow['unit'] || 'pcs'),
+          conversion_factor: 1,
+          is_base_unit: true,
+          is_sale_unit: false,
+          price: Number(firstRow['Sale Price'] || firstRow['sale_price'] || 0),
+          cost_price: Number(firstRow['Cost Price'] || firstRow['cost_price'] || 0),
+          sort_order: 0,
+          is_active: true,
+        });
+
+        // Sale unit
+        await supabase.from('product_units').insert({
+          product_id: productId,
+          unit_name: multiUnitName,
+          conversion_factor: multiUnitConversion,
+          is_base_unit: false,
+          is_sale_unit: true,
+          price: multiUnitSalePrice || Number(firstRow['Sale Price'] || 0) * multiUnitConversion,
+          cost_price: Number(firstRow['Cost Price'] || 0) * multiUnitConversion,
+          sort_order: 1,
+          is_active: true,
+        });
+      }
+
+      // Create inventory for each variant row
+      for (const row of groupRows) {
+        const currentStock = Number(row['Current Stock'] || row['current_stock'] || 0);
+        if (currentStock > 0 && defaultWarehouse) {
+          const { error: invError } = await supabase.from('inventory_items').upsert({
+            tenant_id: '00000000-0000-0000-0000-000000000001',
+            product_id: productId,
+            warehouse_id: defaultWarehouse,
+            quantity_on_hand: currentStock,
+          }, { onConflict: 'product_id,warehouse_id' });
+
+          if (!invError) {
+            await supabase.from('stock_movements').insert({
+              tenant_id: '00000000-0000-0000-0000-000000000001',
+              product_id: productId,
+              warehouse_id: defaultWarehouse,
+              movement_type: 'opening',
+              quantity: currentStock,
+              unit_cost: Number(firstRow['Cost Price'] || 0),
+              reference_type: 'import',
+              notes: 'Initial stock from import',
+            });
+          }
+        }
+      }
+
+      success += productsCreated;
+      existingSkus.push(sku);
+    }
+
+    setResults({ success, skipped, errors: errors.slice(0, 20) });
+    if (success > 0) onImported();
+  }
+
+  function colorNameToHex(name: string): string {
+    const colors: Record<string, string> = {
+      red: '#ef4444', green: '#22c55e', blue: '#3b82f6', yellow: '#eab308',
+      black: '#000000', white: '#ffffff', orange: '#f97316', purple: '#a855f7',
+      pink: '#ec4899', brown: '#a16207', gray: '#6b7280', grey: '#6b7280',
+      silver: '#9ca3af', gold: '#d97706', navy: '#1e3a8a', teal: '#14b8a6',
+    };
+    return colors[name.toLowerCase()] || '#6b7280';
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+          <div>
+            <h2 className="text-lg font-bold text-foreground">Bulk Import Products</h2>
+            <p className="text-xs text-muted-foreground">Import products from CSV or paste data directly</p>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-5 h-5" /></button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-border shrink-0">
+          {[
+            { key: 'upload', label: 'Upload File', icon: Upload },
+            { key: 'paste', label: 'Bulk Paste', icon: Plus },
+            { key: 'guide', label: 'Import Guide', icon: Info },
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key as any)}
+              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition ${activeTab === t.key ? 'border-blue-600 text-blue-600' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+            >
+              <t.icon className="w-4 h-4" /> {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {results && (
+            <div className={`mb-4 p-4 rounded-lg ${results.success > 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+              <div className="flex items-center gap-2 mb-2">
+                {results.success > 0 ? (
+                  <><CheckCircle2 className="w-5 h-5 text-green-600" /><span className="font-semibold text-green-800">Import Complete</span></>
+                ) : (
+                  <><AlertTriangle className="w-5 h-5 text-red-600" /><span className="font-semibold text-red-800">Import Failed</span></>
+                )}
+              </div>
+              <p className="text-sm text-gray-700">
+                <strong>{results.success}</strong> products imported, <strong>{results.skipped}</strong> skipped
+              </p>
+              {results.errors.length > 0 && (
+                <div className="mt-2 text-xs text-red-600 space-y-1">
+                  {results.errors.map((e, i) => <p key={i}>{e}</p>)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {importing && (
+            <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                <div>
+                  <p className="text-sm font-medium text-blue-800">{progress.stage}</p>
+                  <p className="text-xs text-blue-600">{progress.current} of {progress.total}</p>
+                </div>
+              </div>
+              <div className="mt-2 h-2 bg-blue-200 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-600 transition-all" style={{ width: `${(progress.current / Math.max(progress.total, 1)) * 100}%` }} />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'upload' && (
+            <div className="space-y-4">
+              {/* Import Mode */}
+              <div>
+                <label className="block text-sm font-medium mb-2">Import Mode</label>
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    { key: 'simple', label: 'Simple Products', desc: 'Each row = 1 product' },
+                    { key: 'variants', label: 'Product Variants', desc: 'Same name = 1 product with sizes/colors' },
+                    { key: 'multiunit', label: 'Multi-Unit Products', desc: 'Products with unit conversions' },
+                  ].map(m => (
+                    <button
+                      key={m.key}
+                      onClick={() => setImportMode(m.key as any)}
+                      className={`p-3 rounded-lg border text-left transition ${importMode === m.key ? 'border-blue-600 bg-blue-50' : 'border-border hover:border-gray-400'}`}
+                    >
+                      <p className="text-sm font-medium">{m.label}</p>
+                      <p className="text-xs text-muted-foreground">{m.desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Drop Zone */}
+              <div
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  const file = e.dataTransfer.files[0];
+                  if (file && (file.name.endsWith('.csv') || file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
+                    handleFileUpload(file);
+                  }
+                }}
+                className={`border-2 border-dashed rounded-xl p-8 text-center transition ${dragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-gray-50'}`}
+              >
+                <Upload className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
+                <p className="text-sm text-foreground font-medium">Drag & drop CSV or Excel file here</p>
+                <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="mt-3 px-4 py-2 bg-white border border-border rounded-lg text-sm font-medium hover:bg-gray-100 transition"
+                >
+                  Choose File
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={downloadTemplate}
+                  className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
+                >
+                  <Download className="w-4 h-4" /> Download Template CSV
+                </button>
+                <span className="text-xs text-muted-foreground">Supported: CSV, XLSX, XLS</span>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'paste' && (
+            <div className="space-y-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-xs text-blue-800">
+                  <strong>Bulk Paste:</strong> Paste data from Excel or Google Sheets. First row should be headers (Name, SKU, Cost Price, Sale Price, etc.).
+                </p>
+              </div>
+              <textarea
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                placeholder="Paste CSV data here (tab or comma separated)&#10;&#10;Example:&#10;Name,SKU,Cost Price,Sale Price,Current Stock&#10;Product A,SKU-001,100,150,50&#10;Product B,SKU-002,200,300,25"
+                className="w-full h-64 border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 resize-none"
+              />
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">
+                  {pasteText.split('\n').filter(l => l.trim()).length - 1} rows detected
+                </p>
+                <button
+                  onClick={handlePasteImport}
+                  disabled={importing || !pasteText.trim()}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition disabled:opacity-60"
+                >
+                  {importing ? 'Importing...' : 'Import Pasted Data'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'guide' && (
+            <div className="space-y-6">
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <h4 className="text-sm font-semibold text-amber-800 mb-2">Column Reference</h4>
+                <div className="grid grid-cols-2 gap-2 text-xs text-amber-700">
+                  <div><strong>Name</strong> - Product name (required)</div>
+                  <div><strong>SKU</strong> - Unique code (required)</div>
+                  <div><strong>Category</strong> - Existing category name</div>
+                  <div><strong>Brand</strong> - Existing brand name</div>
+                  <div><strong>Unit</strong> - pcs, kg, box, etc.</div>
+                  <div><strong>Cost Price</strong> - Purchase cost</div>
+                  <div><strong>Sale Price</strong> - Selling price</div>
+                  <div><strong>Current Stock</strong> - Opening stock qty</div>
+                  <div><strong>Color</strong> - Color variant name</div>
+                  <div><strong>Size</strong> - Size variant name</div>
+                  <div><strong>Multi-Unit Name</strong> - e.g., Box</div>
+                  <div><strong>Multi-Unit Conversion</strong> - e.g., 100</div>
+                  <div><strong>Multi-Unit Sale Price</strong> - Price per unit</div>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-sm font-semibold mb-3">Import Scenarios</h4>
+                <div className="space-y-3">
+                  <div className="p-3 bg-gray-50 rounded-lg border">
+                    <p className="text-xs font-semibold text-gray-800 mb-1">Simple Products</p>
+                    <p className="text-xs text-gray-600">Each row creates one product. For products without variants.</p>
+                    <pre className="mt-2 text-xs bg-white p-2 rounded border overflow-x-auto">Name,SKU,Cost Price,Sale Price,Current Stock&#10;Hammer,HAM-001,50,80,100</pre>
+                  </div>
+                  <div className="p-3 bg-green-50 rounded-lg border">
+                    <p className="text-xs font-semibold text-green-800 mb-1">Product with Colors/Sizes</p>
+                    <p className="text-xs text-green-600">Rows with same Name create ONE product with multiple variants. Use "Product Variants" mode.</p>
+                    <pre className="mt-2 text-xs bg-white p-2 rounded border overflow-x-auto">Name,SKU,Cost Price,Sale Price,Color,Current Stock&#10;T-Shirt,TS-RED,100,150,Red,50&#10;T-Shirt,TS-BLU,100,150,Blue,30&#10;T-Shirt,TS-GRN,100,150,Green,20</pre>
+                  </div>
+                  <div className="p-3 bg-blue-50 rounded-lg border">
+                    <p className="text-xs font-semibold text-blue-800 mb-1">Multi-Unit Products</p>
+                    <p className="text-xs text-blue-600">For products sold in different packaging (e.g., pieces and boxes).</p>
+                    <pre className="mt-2 text-xs bg-white p-2 rounded border overflow-x-auto">Name,SKU,Unit,Cost Price,Sale Price,Multi-Unit Name,Multi-Unit Conversion,Multi-Unit Sale Price&#10;Tiles,TIL-001,sqft,25,45,Carton,20,800</pre>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={downloadTemplate}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition"
+              >
+                <Download className="w-4 h-4" /> Download Template with Examples
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border px-6 py-4 flex justify-end gap-3 shrink-0">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 border border-border rounded-lg text-sm hover:bg-muted transition"
+          >
+            {results ? 'Close' : 'Cancel'}
+          </button>
         </div>
       </div>
     </div>
