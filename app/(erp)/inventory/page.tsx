@@ -286,6 +286,31 @@ export default function InventoryPage() {
         </button>
       </div>
 
+      {!loading && (
+        <div className="flex items-center gap-4 flex-wrap text-sm">
+          <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg font-medium">
+            <Boxes className="w-4 h-4" />
+            Showing {filtered.length} of {products.filter(p => p.is_active).length} products
+          </span>
+          <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-lg font-medium">
+            <Package className="w-4 h-4" />
+            Total stock: {filtered.reduce((sum, p) => sum + (p.total_stock || 0), 0).toLocaleString()} units
+          </span>
+          <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-700 rounded-lg font-medium">
+            <AlertTriangle className="w-4 h-4" />
+            Low stock: {filtered.filter(p => (p.total_stock || 0) > 0 && (p.total_stock || 0) <= p.min_stock_level).length}
+          </span>
+          <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-700 rounded-lg font-medium">
+            <TrendingDown className="w-4 h-4" />
+            Out of stock: {filtered.filter(p => (p.total_stock || 0) === 0).length}
+          </span>
+          <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-muted text-muted-foreground rounded-lg font-medium">
+            <BarChart3 className="w-4 h-4" />
+            Filtered value: {formatCurrency(filtered.reduce((sum, p) => sum + (p.total_stock || 0) * p.cost_price, 0))}
+          </span>
+        </div>
+      )}
+
       <div className="table-wrapper">
         <div className="overflow-x-auto">
           <table className="w-full">
