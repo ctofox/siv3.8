@@ -314,7 +314,7 @@ export default function POSPage() {
   const [showMobileCart, setShowMobileCart] = useState(false);
 
   return (
-    <div className="flex flex-col lg:flex-row h-[calc(100dvh-144px)] lg:h-[calc(100vh-120px)] gap-4 animate-fade-in">
+    <div className="flex flex-col lg:flex-row lg:h-[calc(100vh-120px)] gap-4 animate-fade-in">
       {/* Mobile Cart Overlay */}
       {showMobileCart && (
         <div
@@ -323,8 +323,10 @@ export default function POSPage() {
         />
       )}
 
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0 min-h-0">
-        <div className="flex flex-col gap-2 mb-3 shrink-0 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+      {/* Left panel — mobile: natural scroll, desktop: flex-col with overflow */}
+      <div className="flex-1 flex flex-col min-w-0 lg:overflow-hidden">
+        {/* Controls row */}
+        <div className="flex flex-col gap-2 mb-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <input
@@ -372,7 +374,8 @@ export default function POSPage() {
           </div>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 content-start pb-4">
+        {/* Product grid — natural flow on mobile, overflow-y-auto on desktop */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 content-start pb-28 lg:pb-4 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
           {loading ? Array.from({ length: 12 }).map((_, i) => (
             <div key={i} className="bg-white rounded-xl border border-border p-3 animate-pulse"><div className="h-20 bg-muted rounded-lg mb-2" /><div className="h-3 bg-muted rounded mb-1" /><div className="h-3 bg-muted rounded w-2/3" /></div>
           )) : filteredProducts.length === 0 ? (

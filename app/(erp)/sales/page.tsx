@@ -248,9 +248,13 @@ export default function SalesPage() {
   const filtered = invoices.filter(i => {
     // Basic filters
     if (search && !i.invoice_number.toLowerCase().includes(search.toLowerCase()) && !i.customer?.name?.toLowerCase().includes(search.toLowerCase())) return false;
-    // Special handling for refundable filter - shows paid/partially_paid invoices that can be refunded
     if (filterStatus === 'refundable') {
+      // Invoices eligible for return (paid or partially paid, with remaining balance)
       if (i.status !== 'paid' && i.status !== 'partially_paid') return false;
+    } else if (filterStatus === 'refunded') {
+      // Invoices that have any sales returns OR status is explicitly refunded
+      const hasReturns = i.sales_returns && i.sales_returns.length > 0;
+      if (!hasReturns && i.status !== 'refunded') return false;
     } else if (filterStatus && i.status !== filterStatus) {
       return false;
     }
