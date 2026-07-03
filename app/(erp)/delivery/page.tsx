@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { formatDate } from '@/lib/format';
 import { toast } from '@/hooks/use-toast';
-import { Plus, Search, MapPin, Clock, CircleCheck as CheckCircle2, Circle as XCircle, Package, Truck, X, CreditCard as Edit, Printer, FileText } from 'lucide-react';
+import { Plus, Search, MapPin, Clock, CircleCheck as CheckCircle2, Circle as XCircle, Package, Truck, X, CreditCard as Edit, Printer, FileText, Filter, ChevronDown } from 'lucide-react';
 import DeliveryChallan from '@/components/DeliveryChallan';
 import type { Delivery, DeliveryStatus, Customer } from '@/lib/types';
 
@@ -30,6 +30,10 @@ export default function DeliveryPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterCustomer, setFilterCustomer] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingDelivery, setEditingDelivery] = useState<DeliveryWithCustomer | null>(null);
   const [challanDelivery, setChallanDelivery] = useState<DeliveryWithCustomer | null>(null);
@@ -111,10 +115,16 @@ export default function DeliveryPage() {
     }
   }
 
-  const filtered = deliveries.filter(d =>
-    (!search || d.delivery_number.toLowerCase().includes(search.toLowerCase()) || d.customer?.name?.toLowerCase().includes(search.toLowerCase())) &&
-    (!filterStatus || d.status === filterStatus)
-  );
+  const filtered = deliveries.filter(d => {
+    if (search && !d.delivery_number.toLowerCase().includes(search.toLowerCase()) && !d.customer?.name?.toLowerCase().includes(search.toLowerCase())) return false;
+    if (filterStatus && d.status !== filterStatus) return false;
+    if (filterCustomer && d.customer_id !== filterCustomer) return false;
+    if (filterDateFrom && d.delivery_date && d.delivery_date < filterDateFrom) return false;
+    if (filterDateTo && d.delivery_date && d.delivery_date > filterDateTo) return false;
+    if (filterDateFrom && !d.delivery_date) return false;
+    if (filterDateTo && !d.delivery_date) return false;
+    return true;
+  });
 
   const stats = {
     pending: deliveries.filter(d => d.status === 'pending').length,
@@ -130,8 +140,9 @@ export default function DeliveryPage() {
           <h1 className="text-2xl font-bold text-foreground">Delivery Management</h1>
           <p className="text-muted-foreground text-sm mt-0.5">Track and manage deliveries</p>
         </div>
-        <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition">
-          <Plus className="w-4 h-4" />Create Delivery
+        <button onClick={() => setShowCreateModal(true)} className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-semibold transition shrink-0">
+          <Plus className="w-4 h-4" />
+          <span className="hidden sm:inline">Create Delivery</span>
         </button>
       </div>
 
@@ -154,15 +165,75 @@ export default function DeliveryPage() {
         ))}
       </div>
 
-      <div className="bg-white rounded-xl border border-border p-4 shadow-sm flex flex-wrap gap-3">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search deliveries..." className="w-full pl-8 pr-4 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+      <div className="bg-white rounded-xl border border-border p-4 shadow-sm space-y-3">
+        <div className="flex flex-wrap gap-3">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search deliveries..." className="w-full pl-8 pr-4 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          </div>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+            <option value="">All Status</option>
+            {Object.entries(statusConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <button
+            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+            className={`flex items-center gap-1.5 border rounded-lg px-3 py-2 text-sm transition ${showAdvancedFilters ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-border text-muted-foreground hover:text-foreground'}`}
+          >
+            <Filter className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">More Filters</span>
+            <ChevronDown className={`w-3 h-3 transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`} />
+          </button>
         </div>
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
-          <option value="">All Status</option>
-          {Object.entries(statusConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-        </select>
+
+        {/* Advanced Filters */}
+        {showAdvancedFilters && (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-3 border-t border-border">
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Customer</label>
+              <select value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+                <option value="">All Customers</option>
+                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Date From</label>
+              <input type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Date To</label>
+              <input type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+            </div>
+          </div>
+        )}
+
+        {(filterCustomer || filterDateFrom || filterDateTo) && (
+          <div className="flex flex-wrap gap-2 pt-2">
+            {filterCustomer && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-teal-100 text-teal-700 text-xs rounded-full">
+                Customer: {customers.find(c => c.id === filterCustomer)?.name || ''}
+                <button onClick={() => setFilterCustomer('')} className="hover:text-teal-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {filterDateFrom && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded-full">
+                From: {filterDateFrom}
+                <button onClick={() => setFilterDateFrom('')} className="hover:text-amber-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {filterDateTo && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded-full">
+                To: {filterDateTo}
+                <button onClick={() => setFilterDateTo('')} className="hover:text-amber-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            <button
+              onClick={() => { setFilterCustomer(''); setFilterDateFrom(''); setFilterDateTo(''); }}
+              className="text-xs text-muted-foreground hover:text-red-600 underline"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="table-wrapper">
@@ -217,13 +288,13 @@ export default function DeliveryPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button onClick={() => viewChallan(d)} title="View Challan" className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition"><Printer className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => setEditingDelivery(d)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition"><Edit className="w-3.5 h-3.5" /></button>
+                      <div className="flex items-center justify-end gap-1 sm:gap-2">
+                        <button onClick={() => viewChallan(d)} title="View Challan" className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition"><Printer className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setEditingDelivery(d)} className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition"><Edit className="w-3.5 h-3.5" /></button>
                         <select
                           value={d.status}
                           onChange={e => updateStatus(d.id, e.target.value as DeliveryStatus)}
-                          className="text-xs border border-border rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                          className="text-[10px] sm:text-xs border border-border rounded-lg px-1.5 sm:px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                         >
                           {Object.entries(statusConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                         </select>

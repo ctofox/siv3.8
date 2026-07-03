@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { toast } from '@/hooks/use-toast';
-import { ShoppingCart, Plus, Search, Eye, X, Trash2, TrendingUp, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, Printer, DollarSign, Send, CreditCard, UserPlus, RotateCcw, Package } from 'lucide-react';
+import { ShoppingCart, Plus, Search, Eye, X, Trash2, TrendingUp, Clock, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, Printer, DollarSign, Send, CreditCard, UserPlus, RotateCcw, Package, Filter, ChevronDown } from 'lucide-react';
 import type { Invoice, InvoiceStatus, Customer, Product, Payment, PaymentMethod, ProductUnit } from '@/lib/types';
 import { isMultiUnitEnabled, getDefaultSaleUnit, convertToBaseUnit } from '@/lib/unit-utils';
 import ProductSearchInput from '@/components/ui/ProductSearchInput';
@@ -47,6 +47,11 @@ export default function SalesPage() {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterPaymentMethod, setFilterPaymentMethod] = useState('');
+  const [filterProduct, setFilterProduct] = useState('');
+  const [filterCustomer, setFilterCustomer] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState<{ code: string; name: string }[]>([]);
   const [stats, setStats] = useState({ total: 0, paid: 0, outstanding: 0, overdue: 0 });
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -237,11 +242,39 @@ export default function SalesPage() {
     }
   }
 
-  const filtered = invoices.filter(i =>
-    (!search || i.invoice_number.toLowerCase().includes(search.toLowerCase()) || i.customer?.name?.toLowerCase().includes(search.toLowerCase())) &&
-    (!filterStatus || i.status === filterStatus) &&
-    (!filterPaymentMethod || (i.payments && i.payments.some(p => p.payment_method === filterPaymentMethod)))
-  );
+  const filtered = invoices.filter(i => {
+    // Basic filters
+    if (search && !i.invoice_number.toLowerCase().includes(search.toLowerCase()) && !i.customer?.name?.toLowerCase().includes(search.toLowerCase())) return false;
+    if (filterStatus && i.status !== filterStatus) return false;
+    if (filterPaymentMethod && (!i.payments || !i.payments.some(p => p.payment_method === filterPaymentMethod))) return false;
+
+    // Advanced filters
+    if (filterCustomer && i.customer_id !== filterCustomer) return false;
+    if (filterDateFrom && i.invoice_date < filterDateFrom) return false;
+    if (filterDateTo && i.invoice_date > filterDateTo) return false;
+
+    return true;
+  });
+
+  // Filter by product (requires async check, so we handle separately)
+  const [productFilteredInvoices, setProductFilteredInvoices] = useState<InvoiceWithCustomer[]>([]);
+
+  useEffect(() => {
+    async function filterByProduct() {
+      if (!filterProduct) {
+        setProductFilteredInvoices(filtered);
+        return;
+      }
+      const { data: invoiceItems } = await supabase
+        .from('invoice_items')
+        .select('invoice_id')
+        .eq('product_id', filterProduct);
+
+      const invoiceIds = new Set((invoiceItems || []).map((item: any) => item.invoice_id));
+      setProductFilteredInvoices(filtered.filter(inv => invoiceIds.has(inv.id)));
+    }
+    filterByProduct();
+  }, [filterProduct, filtered]);
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -251,11 +284,13 @@ export default function SalesPage() {
           <p className="text-muted-foreground text-sm mt-0.5">Track all sales transactions</p>
         </div>
         <div className="flex items-center gap-2">
-          <Link href="/sales/pos" className="flex items-center gap-2 border border-blue-600 text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg text-sm font-semibold transition">
-            <ShoppingCart className="w-4 h-4" />POS
+          <Link href="/sales/pos" className="flex items-center justify-center gap-2 border border-blue-600 text-blue-600 hover:bg-blue-50 px-3 sm:px-4 py-2 rounded-lg text-sm font-semibold transition shrink-0">
+            <ShoppingCart className="w-4 h-4" />
+            <span className="hidden sm:inline">POS</span>
           </Link>
-          <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition">
-            <Plus className="w-4 h-4" />New Invoice
+          <button onClick={() => setShowCreateModal(true)} className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-semibold transition shrink-0">
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">New Invoice</span>
           </button>
         </div>
       </div>
@@ -274,19 +309,92 @@ export default function SalesPage() {
         ))}
       </div>
 
-      <div className="bg-white rounded-xl border border-border p-4 shadow-sm flex flex-wrap gap-3">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search invoices..." className="w-full pl-8 pr-4 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+      <div className="bg-white rounded-xl border border-border p-4 shadow-sm space-y-3">
+        <div className="flex flex-wrap gap-3">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search invoices..." className="w-full pl-8 pr-4 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          </div>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+            <option value="">All Status</option>
+            {Object.entries(statusConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <select value={filterPaymentMethod} onChange={e => setFilterPaymentMethod(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+            <option value="">All Payment Methods</option>
+            {paymentMethods.map(pm => <option key={pm.code} value={pm.code}>{pm.name}</option>)}
+          </select>
+          <button
+            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+            className={`flex items-center gap-1.5 border rounded-lg px-3 py-2 text-sm transition ${showAdvancedFilters ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-border text-muted-foreground hover:text-foreground'}`}
+          >
+            <Filter className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">More Filters</span>
+            <ChevronDown className={`w-3 h-3 transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`} />
+          </button>
         </div>
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
-          <option value="">All Status</option>
-          {Object.entries(statusConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-        </select>
-        <select value={filterPaymentMethod} onChange={e => setFilterPaymentMethod(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
-          <option value="">All Payment Methods</option>
-          {paymentMethods.map(pm => <option key={pm.code} value={pm.code}>{pm.name}</option>)}
-        </select>
+
+        {/* Advanced Filters */}
+        {showAdvancedFilters && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-border">
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Product</label>
+              <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+                <option value="">All Products</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Customer</label>
+              <select value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+                <option value="">All Customers</option>
+                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Date From</label>
+              <input type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Date To</label>
+              <input type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+            </div>
+          </div>
+        )}
+
+        {(filterProduct || filterCustomer || filterDateFrom || filterDateTo) && (
+          <div className="flex flex-wrap gap-2 pt-2">
+            {filterProduct && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-full">
+                Product: {products.find(p => p.id === filterProduct)?.name || ''}
+                <button onClick={() => setFilterProduct('')} className="hover:text-blue-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {filterCustomer && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-teal-100 text-teal-700 text-xs rounded-full">
+                Customer: {customers.find(c => c.id === filterCustomer)?.name || ''}
+                <button onClick={() => setFilterCustomer('')} className="hover:text-teal-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {filterDateFrom && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded-full">
+                From: {filterDateFrom}
+                <button onClick={() => setFilterDateFrom('')} className="hover:text-amber-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {filterDateTo && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded-full">
+                To: {filterDateTo}
+                <button onClick={() => setFilterDateTo('')} className="hover:text-amber-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            <button
+              onClick={() => { setFilterProduct(''); setFilterCustomer(''); setFilterDateFrom(''); setFilterDateTo(''); }}
+              className="text-xs text-muted-foreground hover:text-red-600 underline"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="table-wrapper">
@@ -308,9 +416,9 @@ export default function SalesPage() {
             <tbody className="divide-y divide-border">
               {loading ? Array.from({ length: 6 }).map((_, i) => (
                 <tr key={i}>{Array.from({ length: 9 }).map((_, j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-muted rounded animate-pulse" /></td>)}</tr>
-              )) : filtered.length === 0 ? (
+              )) : productFilteredInvoices.length === 0 ? (
                 <tr><td colSpan={9} className="px-4 py-12 text-center text-muted-foreground text-sm">No invoices found</td></tr>
-              ) : filtered.map((inv) => {
+              ) : productFilteredInvoices.map((inv) => {
                 const cfg = statusConfig[inv.status as InvoiceStatus] || statusConfig.draft;
                 const hasReturns = inv.sales_returns && inv.sales_returns.length > 0;
                 const totalReturnedQty = hasReturns
@@ -342,8 +450,8 @@ export default function SalesPage() {
                     <td className="px-4 py-3 text-right text-sm text-green-600 font-semibold">{formatCurrency(inv.amount_paid)}</td>
                     <td className="px-4 py-3 text-right text-sm font-bold text-red-600">{formatCurrency(inv.balance_due || (inv.total_amount - inv.amount_paid))}</td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        <span className={`badge-status ${cfg.bg} ${cfg.color}`}>{cfg.label}</span>
+                      <div className="flex flex-wrap gap-1 items-center">
+                        <span className={`badge-status ${cfg.bg} ${cfg.color} whitespace-nowrap`}>{cfg.label}</span>
                         {inv.payments && inv.payments.length > 0 && (
                           <span className="badge-status bg-slate-100 text-slate-700 flex items-center gap-0.5">
                             <CreditCard className="w-2.5 h-2.5" />
@@ -359,18 +467,18 @@ export default function SalesPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1">
+                      <div className="flex items-center justify-end gap-0.5 sm:gap-1">
                         {inv.status === 'draft' && (
-                          <button onClick={() => updateInvoiceStatus(inv, 'sent')} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition" title="Mark as Sent">
+                          <button onClick={() => updateInvoiceStatus(inv, 'sent')} className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition" title="Mark as Sent">
                             <Send className="w-3.5 h-3.5" />
                           </button>
                         )}
                         {(inv.status === 'sent' || inv.status === 'partially_paid') && (inv.balance_due || inv.total_amount - inv.amount_paid) > 0 && (
-                          <button onClick={() => openPaymentModal(inv)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-green-50 text-muted-foreground hover:text-green-600 transition" title="Record Payment">
+                          <button onClick={() => openPaymentModal(inv)} className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg hover:bg-green-50 text-muted-foreground hover:text-green-600 transition" title="Record Payment">
                             <DollarSign className="w-3.5 h-3.5" />
                           </button>
                         )}
-                        <button onClick={() => viewInvoiceDetails(inv)} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition" title="View Details">
+                        <button onClick={() => viewInvoiceDetails(inv)} className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg hover:bg-blue-50 text-muted-foreground hover:text-blue-600 transition" title="View Details">
                           <Eye className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -382,7 +490,7 @@ export default function SalesPage() {
           </table>
         </div>
         <div className="px-4 py-3 border-t border-border">
-          <p className="text-xs text-muted-foreground">{filtered.length} invoices</p>
+          <p className="text-xs text-muted-foreground">{productFilteredInvoices.length} invoices</p>
         </div>
       </div>
 

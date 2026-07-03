@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
+import QuickActionDrawer from '@/components/ui/QuickActionDrawer';
 import { Menu } from 'lucide-react';
 
 export default function ERPLayout({ children }: { children: React.ReactNode }) {
@@ -79,6 +80,9 @@ export default function ERPLayout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+
+      {/* Global Quick Action Drawer */}
+      <QuickActionDrawer />
     </div>
   );
 }

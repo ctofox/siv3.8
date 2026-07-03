@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { toast } from '@/hooks/use-toast';
-import { Plus, Search, Eye, Send, X, Trash2, FileText, ArrowRight, UserPlus, CreditCard, DollarSign, CircleCheck as CheckCircle, Printer, Share2, MessageCircle, Mail } from 'lucide-react';
+import { Plus, Search, Eye, Send, X, Trash2, FileText, ArrowRight, UserPlus, CreditCard, DollarSign, CircleCheck as CheckCircle, Printer, Share2, MessageCircle, Mail, Filter, ChevronDown } from 'lucide-react';
 import type { Quotation, QuotationStatus, Customer, Product } from '@/lib/types';
 import ProductSearchInput from '@/components/ui/ProductSearchInput';
 import PrintTemplate from '@/components/PrintTemplate';
@@ -30,6 +30,11 @@ export default function QuotationsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterProduct, setFilterProduct] = useState('');
+  const [filterCustomer, setFilterCustomer] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [viewingQuotation, setViewingQuotation] = useState<QuotationWithCustomer | null>(null);
   const [quotationItems, setQuotationItems] = useState<any[]>([]);
@@ -84,10 +89,34 @@ export default function QuotationsPage() {
     setConvertingQuotation(quotation);
   }
 
-  const filtered = quotations.filter(q =>
-    (!search || q.quote_number.toLowerCase().includes(search.toLowerCase()) || q.customer?.name?.toLowerCase().includes(search.toLowerCase())) &&
-    (!filterStatus || q.status === filterStatus)
-  );
+  const filtered = quotations.filter(q => {
+    if (search && !q.quote_number.toLowerCase().includes(search.toLowerCase()) && !q.customer?.name?.toLowerCase().includes(search.toLowerCase())) return false;
+    if (filterStatus && q.status !== filterStatus) return false;
+    if (filterCustomer && q.customer_id !== filterCustomer) return false;
+    if (filterDateFrom && q.issue_date < filterDateFrom) return false;
+    if (filterDateTo && q.issue_date > filterDateTo) return false;
+    return true;
+  });
+
+  // Filter by product (requires async check)
+  const [productFilteredQuotations, setProductFilteredQuotations] = useState<QuotationWithCustomer[]>([]);
+
+  useEffect(() => {
+    async function filterByProduct() {
+      if (!filterProduct) {
+        setProductFilteredQuotations(filtered);
+        return;
+      }
+      const { data: quoteItems } = await supabase
+        .from('quotation_items')
+        .select('quotation_id')
+        .eq('product_id', filterProduct);
+
+      const quoteIds = new Set((quoteItems || []).map((item: any) => item.quotation_id));
+      setProductFilteredQuotations(filtered.filter(q => quoteIds.has(q.id)));
+    }
+    filterByProduct();
+  }, [filterProduct, filtered]);
 
   const stats = {
     total: quotations.length,
@@ -103,8 +132,9 @@ export default function QuotationsPage() {
           <h1 className="text-2xl font-bold text-foreground">Quotations</h1>
           <p className="text-muted-foreground text-sm mt-0.5">Create and manage price quotations</p>
         </div>
-        <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition">
-          <Plus className="w-4 h-4" />New Quotation
+        <button onClick={() => setShowCreateModal(true)} className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-semibold transition shrink-0">
+          <Plus className="w-4 h-4" />
+          <span className="hidden sm:inline">New Quotation</span>
         </button>
       </div>
 
@@ -122,15 +152,88 @@ export default function QuotationsPage() {
         ))}
       </div>
 
-      <div className="bg-white rounded-xl border border-border p-4 shadow-sm flex flex-wrap gap-3">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search quotations..." className="w-full pl-8 pr-4 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+      <div className="bg-white rounded-xl border border-border p-4 shadow-sm space-y-3">
+        <div className="flex flex-wrap gap-3">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search quotations..." className="w-full pl-8 pr-4 py-2 text-sm border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+          </div>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+            <option value="">All Status</option>
+            {Object.entries(statusConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <button
+            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+            className={`flex items-center gap-1.5 border rounded-lg px-3 py-2 text-sm transition ${showAdvancedFilters ? 'border-blue-500 text-blue-600 bg-blue-50' : 'border-border text-muted-foreground hover:text-foreground'}`}
+          >
+            <Filter className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">More Filters</span>
+            <ChevronDown className={`w-3 h-3 transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`} />
+          </button>
         </div>
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
-          <option value="">All Status</option>
-          {Object.entries(statusConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-        </select>
+
+        {/* Advanced Filters */}
+        {showAdvancedFilters && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-border">
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Product</label>
+              <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+                <option value="">All Products</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Customer</label>
+              <select value={filterCustomer} onChange={e => setFilterCustomer(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+                <option value="">All Customers</option>
+                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Date From</label>
+              <input type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Date To</label>
+              <input type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
+            </div>
+          </div>
+        )}
+
+        {(filterProduct || filterCustomer || filterDateFrom || filterDateTo) && (
+          <div className="flex flex-wrap gap-2 pt-2">
+            {filterProduct && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-full">
+                Product: {products.find(p => p.id === filterProduct)?.name || ''}
+                <button onClick={() => setFilterProduct('')} className="hover:text-blue-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {filterCustomer && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-teal-100 text-teal-700 text-xs rounded-full">
+                Customer: {customers.find(c => c.id === filterCustomer)?.name || ''}
+                <button onClick={() => setFilterCustomer('')} className="hover:text-teal-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {filterDateFrom && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded-full">
+                From: {filterDateFrom}
+                <button onClick={() => setFilterDateFrom('')} className="hover:text-amber-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {filterDateTo && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded-full">
+                To: {filterDateTo}
+                <button onClick={() => setFilterDateTo('')} className="hover:text-amber-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            <button
+              onClick={() => { setFilterProduct(''); setFilterCustomer(''); setFilterDateFrom(''); setFilterDateTo(''); }}
+              className="text-xs text-muted-foreground hover:text-red-600 underline"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="table-wrapper">
@@ -150,9 +253,9 @@ export default function QuotationsPage() {
             <tbody className="divide-y divide-border">
               {loading ? Array.from({ length: 5 }).map((_, i) => (
                 <tr key={i}>{Array.from({ length: 7 }).map((_, j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-muted rounded animate-pulse" /></td>)}</tr>
-              )) : filtered.length === 0 ? (
+              )) : productFilteredQuotations.length === 0 ? (
                 <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground text-sm">No quotations found</td></tr>
-              ) : filtered.map((q) => {
+              ) : productFilteredQuotations.map((q) => {
                 const cfg = statusConfig[q.status as QuotationStatus] || statusConfig.draft;
                 return (
                   <tr key={q.id} className="hover:bg-muted/30 transition-colors">
