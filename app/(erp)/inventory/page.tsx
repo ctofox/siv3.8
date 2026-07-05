@@ -9,8 +9,9 @@ import JsBarcode from 'jsbarcode';
 import { Package, Plus, Search, CreditCard as Edit, Trash2, TriangleAlert as AlertTriangle, ChartBar as BarChart3, Boxes, TrendingDown, RefreshCw, X, Warehouse, Palette, Ruler, ChevronDown, ChevronUp, ChevronRight, Info, Settings, Barcode, Camera, Printer, Download, Upload, CircleCheck as CheckCircle2 } from 'lucide-react';
 import type { Product, Category, Brand, Warehouse as WarehouseType, ProductColor, ProductSize, ProductUnit } from '@/lib/types';
 
-function StockByWarehouse({ productId, warehouses, inventoryByWarehouse }: { productId: string; warehouses: WarehouseType[]; inventoryByWarehouse: Record<string, Record<string, number>> }) {
+function StockByWarehouse({ productId, warehouses, inventoryByWarehouse, unit }: { productId: string; warehouses: WarehouseType[]; inventoryByWarehouse: Record<string, Record<string, number>>; unit?: string }) {
   const stockByWh = inventoryByWarehouse[productId] || {};
+  const displayUnit = unit || 'pcs';
   return (
     <div className="text-xs space-y-0.5">
       {warehouses.map(w => {
@@ -18,7 +19,7 @@ function StockByWarehouse({ productId, warehouses, inventoryByWarehouse }: { pro
         return (
           <div key={w.id} className="flex justify-between gap-2">
             <span className="text-muted-foreground">{w.name}:</span>
-            <span className={qty > 0 ? 'text-foreground font-medium' : 'text-muted-foreground'}>{qty}</span>
+            <span className={qty > 0 ? 'text-foreground font-medium' : 'text-muted-foreground'}>{qty} {displayUnit}</span>
           </div>
         );
       })}
@@ -49,6 +50,7 @@ export default function InventoryPage() {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterColor, setFilterColor] = useState('');
   const [filterSize, setFilterSize] = useState('');
+  const [filterUnit, setFilterUnit] = useState('');
   const [allColors, setAllColors] = useState<{ id: string; name: string; hex_code: string }[]>([]);
   const [allSizes, setAllSizes] = useState<{ id: string; name: string }[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -152,7 +154,8 @@ export default function InventoryPage() {
     );
     const matchColor = !filterColor || p.product_colors?.some(c => c.name === filterColor);
     const matchSize = !filterSize || p.product_sizes?.some(s => s.name === filterSize);
-    return matchSearch && matchCat && matchBrand && matchWarehouse && matchStatus && matchColor && matchSize;
+    const matchUnit = !filterUnit || p.unit === filterUnit;
+    return matchSearch && matchCat && matchBrand && matchWarehouse && matchStatus && matchColor && matchSize && matchUnit;
   });
 
   function getStockBadge(qty: number, min: number) {
@@ -299,6 +302,12 @@ export default function InventoryPage() {
             {allSizes.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
           </select>
         )}
+        {unitTypes.length > 0 && (
+          <select value={filterUnit} onChange={e => setFilterUnit(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+            <option value="">All Units</option>
+            {unitTypes.map(u => <option key={u.id} value={u.unit_name}>{u.unit_name}</option>)}
+          </select>
+        )}
         <button onClick={loadData} className="flex items-center gap-2 border border-border rounded-lg px-3 py-2 text-sm hover:bg-muted transition">
           <RefreshCw className="w-3.5 h-3.5" />
           Refresh
@@ -313,7 +322,7 @@ export default function InventoryPage() {
           </span>
           <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-lg font-medium">
             <Package className="w-4 h-4" />
-            Total stock: {filtered.reduce((sum, p) => sum + (p.total_stock || 0), 0).toLocaleString()} units
+            Total stock: {filtered.reduce((sum, p) => sum + (p.total_stock || 0), 0).toLocaleString()} items
           </span>
           <span className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-700 rounded-lg font-medium">
             <AlertTriangle className="w-4 h-4" />
@@ -383,11 +392,11 @@ export default function InventoryPage() {
                     <td className="px-4 py-3 text-right">
                       <div className="group relative">
                         <span className={`text-sm font-bold cursor-help ${(p.total_stock || 0) === 0 ? 'text-red-500' : (p.total_stock || 0) <= p.min_stock_level ? 'text-amber-500' : 'text-foreground'}`}>
-                          {p.total_stock || 0}
+                          {p.total_stock || 0} <span className="text-xs font-normal text-muted-foreground">{p.unit || 'pcs'}</span>
                         </span>
                         <div className="absolute right-0 top-full mt-1 bg-white border border-border rounded-lg shadow-lg p-3 z-10 hidden group-hover:block min-w-[180px]">
                           <p className="text-xs font-semibold mb-2 text-foreground">Stock by Location:</p>
-                          <StockByWarehouse productId={p.id} warehouses={warehouses} inventoryByWarehouse={inventoryByWarehouse} />
+                          <StockByWarehouse productId={p.id} warehouses={warehouses} inventoryByWarehouse={inventoryByWarehouse} unit={p.unit || 'pcs'} />
                         </div>
                       </div>
                     </td>

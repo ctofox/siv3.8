@@ -1,14 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { formatCurrency } from '@/lib/format';
-import { BarChart3, TrendingUp, Package, Users, Download, FileSpreadsheet } from 'lucide-react';
+import { ChartBar as BarChart3, TrendingUp, Package, Users, Download, FileSpreadsheet, Calendar, ArrowRight, RefreshCw, Printer } from 'lucide-react';
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend
+  Tooltip, ResponsiveContainer, Legend, LineChart, Line
 } from 'recharts';
-import type { Product, Customer, Invoice, PurchaseOrder } from '@/lib/types';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#6b7280'];
 
@@ -18,8 +18,9 @@ export default function ReportsPage() {
   const [activeTab, setActiveTab] = useState<ReportTab>('overview');
   const [period, setPeriod] = useState('this_month');
   const [loading, setLoading] = useState(true);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
-  // Report data
   const [stats, setStats] = useState({
     totalRevenue: 0,
     totalPurchases: 0,
@@ -29,35 +30,41 @@ export default function ReportsPage() {
     totalCustomers: 0,
     totalProducts: 0,
     inventoryValue: 0,
+    cogsActual: 0,
   });
   const [monthlyData, setMonthlyData] = useState<{ month: string; sales: number; purchases: number; profit: number }[]>([]);
   const [categoryData, setCategoryData] = useState<{ name: string; revenue: number; color: string }[]>([]);
-  const [topProducts, setTopProducts] = useState<{ name: string; sales: number; revenue: number }[]>([]);
+  const [topProducts, setTopProducts] = useState<{ name: string; sales: number; revenue: number; cost: number; profit: number; unit?: string }[]>([]);
   const [topCustomers, setTopCustomers] = useState<{ name: string; purchases: number; revenue: number }[]>([]);
 
-  useEffect(() => { loadReportData(); }, [period]);
+  useEffect(() => { loadReportData(); }, [period, dateFrom, dateTo]);
 
   async function loadReportData() {
     setLoading(true);
     const { startDate, endDate } = getDateRange(period);
+    const effectiveStart = dateFrom || startDate;
+    const effectiveEnd = dateTo || endDate || undefined;
 
     const [
       invoicesRes, purchasesRes, customersRes, productsRes, invItemsRes,
-      topProductsRes, topCustomersRes
+      topProductsRes, topCustomersRes, stockMovementsRes, paymentsRes
     ] = await Promise.all([
-      supabase.from('invoices').select('total_amount, subtotal, invoice_date').gte('invoice_date', startDate).lte('invoice_date', endDate || undefined),
-      supabase.from('purchase_orders').select('total_amount').gte('order_date', startDate).lte('order_date', endDate || undefined),
+      supabase.from('invoices').select('total_amount, subtotal, invoice_date, status').gte('invoice_date', effectiveStart).lte('invoice_date', effectiveEnd || undefined).neq('status', 'cancelled'),
+      supabase.from('purchase_orders').select('total_amount').gte('order_date', effectiveStart).lte('order_date', effectiveEnd || undefined),
       supabase.from('customers').select('total_purchases'),
-      supabase.from('products').select('id'),
+      supabase.from('products').select('id, unit'),
       supabase.from('inventory_items').select('quantity_on_hand, product:products(cost_price)'),
-      supabase.from('invoice_items').select('product_id, quantity, subtotal, product:products(name)').gte('created_at', startDate).lte('created_at', endDate || undefined).order('quantity', { ascending: false }).limit(10),
+      supabase.from('invoice_items').select('product_id, quantity, subtotal, unit_name, product:products(name, cost_price)').gte('created_at', effectiveStart).lte('created_at', effectiveEnd || undefined).order('quantity', { ascending: false }).limit(50),
       supabase.from('customers').select('name, total_purchases').order('total_purchases', { ascending: false }).limit(10),
+      supabase.from('stock_movements').select('quantity, unit_cost, movement_type').eq('movement_type', 'sale').gte('created_at', effectiveStart).lte('created_at', effectiveEnd || undefined),
+      supabase.from('payments').select('amount').eq('payment_type', 'received').gte('payment_date', effectiveStart).lte('payment_date', effectiveEnd || undefined),
     ]);
 
     const totalRevenue = (invoicesRes.data || []).reduce((s: number, i: any) => s + Number(i.total_amount), 0);
     const totalPurchases = (purchasesRes.data || []).reduce((s: number, p: any) => s + Number(p.total_amount), 0);
-    const grossProfit = totalRevenue * 0.35;
-    const netProfit = grossProfit * 0.77;
+    const cogsActual = (stockMovementsRes.data || []).reduce((s: number, m: any) => s + Math.abs(Number(m.quantity)) * Number(m.unit_cost || 0), 0);
+    const grossProfit = totalRevenue - cogsActual;
+    const netProfit = grossProfit * 0.85;
     const inventoryValue = (invItemsRes.data || []).reduce((s: number, item: any) => s + (Number(item.quantity_on_hand) * Number(item.product?.cost_price || 0)), 0);
 
     setStats({
@@ -69,33 +76,31 @@ export default function ReportsPage() {
       totalCustomers: customersRes.data?.length || 0,
       totalProducts: productsRes.data?.length || 0,
       inventoryValue,
+      cogsActual,
     });
 
-    // Top products
-    const productMap: Record<string, { name: string; sales: number; revenue: number }> = {};
+    const productMap: Record<string, { name: string; sales: number; revenue: number; cost: number; unit?: string }> = {};
     (topProductsRes.data || []).forEach((item: any) => {
       if (item.product) {
         const id = item.product_id;
-        if (!productMap[id]) productMap[id] = { name: item.product.name, sales: 0, revenue: 0 };
+        if (!productMap[id]) productMap[id] = { name: item.product.name, sales: 0, revenue: 0, cost: 0, unit: item.unit_name };
         productMap[id].sales += Number(item.quantity);
         productMap[id].revenue += Number(item.subtotal);
+        productMap[id].cost += Number(item.quantity) * Number(item.product.cost_price || 0);
       }
     });
-    setTopProducts(Object.values(productMap).sort((a, b) => b.revenue - a.revenue).slice(0, 5));
+    setTopProducts(Object.values(productMap).map(p => ({ ...p, profit: p.revenue - p.cost })).sort((a, b) => b.revenue - a.revenue).slice(0, 10));
 
-    // Top customers
     setTopCustomers((topCustomersRes.data || []).map((c: any) => ({
       name: c.name,
       purchases: 0,
       revenue: c.total_purchases,
     })));
 
-    // Monthly chart data
     const monthly = await getMonthlyData();
     setMonthlyData(monthly);
 
-    // Category data
-    const catData = await getCategoryRevenue(startDate, endDate);
+    const catData = await getCategoryRevenue(effectiveStart, effectiveEnd || null);
     setCategoryData(catData);
 
     setLoading(false);
@@ -114,31 +119,40 @@ export default function ReportsPage() {
       case 'this_month':
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
         return { startDate: monthStart, endDate: null };
+      case 'this_quarter':
+        const quarterStart = Math.floor(now.getMonth() / 3) * 3;
+        const qStart = new Date(now.getFullYear(), quarterStart, 1).toISOString().split('T')[0];
+        return { startDate: qStart, endDate: null };
       case 'this_year':
         const yearStart = new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0];
         return { startDate: yearStart, endDate: null };
+      case 'custom':
+        return { startDate: dateFrom || today, endDate: dateTo || null };
       default:
         return { startDate: today, endDate: null };
     }
   }
 
   async function getMonthlyData() {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const result: { month: string; sales: number; purchases: number; profit: number }[] = [];
 
-    for (let i = 0; i < 6; i++) {
+    const currentMonth = new Date().getMonth();
+    for (let i = 0; i <= currentMonth; i++) {
       const startDate = new Date(new Date().getFullYear(), i, 1).toISOString().split('T')[0];
       const endDate = new Date(new Date().getFullYear(), i + 1, 0).toISOString().split('T')[0];
 
-      const [invRes, poRes] = await Promise.all([
-        supabase.from('invoices').select('total_amount').gte('invoice_date', startDate).lt('invoice_date', endDate),
+      const [invRes, poRes, stockRes] = await Promise.all([
+        supabase.from('invoices').select('total_amount').gte('invoice_date', startDate).lt('invoice_date', endDate).neq('status', 'cancelled'),
         supabase.from('purchase_orders').select('total_amount').gte('order_date', startDate).lt('order_date', endDate),
+        supabase.from('stock_movements').select('quantity, unit_cost').eq('movement_type', 'sale').gte('created_at', startDate).lt('created_at', endDate),
       ]);
 
       const sales = (invRes.data || []).reduce((s: number, inv: any) => s + Number(inv.total_amount), 0);
       const purchases = (poRes.data || []).reduce((s: number, po: any) => s + Number(po.total_amount), 0);
+      const cogs = (stockRes.data || []).reduce((s: number, m: any) => s + Math.abs(Number(m.quantity)) * Number(m.unit_cost || 0), 0);
 
-      result.push({ month: months[i], sales, purchases, profit: sales * 0.35 });
+      result.push({ month: months[i], sales, purchases, profit: sales - cogs });
     }
 
     return result;
@@ -169,15 +183,15 @@ export default function ReportsPage() {
 
     switch (activeTab) {
       case 'sales':
-        csv = 'Month,Sales,Purchases,Profit\n' + monthlyData.map(m => `${m.month},${m.sales},${m.purchases},${m.profit}`).join('\n');
+        csv = 'Month,Sales,Purchases,Gross Profit\n' + monthlyData.map(m => `${m.month},${m.sales},${m.purchases},${m.profit}`).join('\n');
         filename = 'sales_report.csv';
         break;
       case 'inventory':
-        csv = 'Product,Units Sold,Revenue\n' + topProducts.map(p => `"${p.name}",${p.sales},${p.revenue}`).join('\n');
+        csv = 'Product,Units Sold,Revenue,Cost,Profit\n' + topProducts.map(p => `"${p.name}",${p.sales},${p.revenue},${p.cost},${p.profit}`).join('\n');
         filename = 'inventory_report.csv';
         break;
       case 'customers':
-        csv = 'Customer,Revenue\n' + topCustomers.map(c => `"${c.name}",${c.revenue}`).join('\n');
+        csv = 'Customer,Total Revenue\n' + topCustomers.map(c => `"${c.name}",${c.revenue}`).join('\n');
         filename = 'customers_report.csv';
         break;
       default:
@@ -194,6 +208,10 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url);
   }
 
+  function handlePrint() {
+    window.print();
+  }
+
   const tabs = [
     { id: 'overview', label: 'Overview', icon: BarChart3 },
     { id: 'sales', label: 'Sales', icon: TrendingUp },
@@ -204,30 +222,45 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Reports & Analytics</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Business intelligence and performance reports</p>
+          <p className="text-muted-foreground text-sm mt-0.5">Business intelligence and performance insights</p>
         </div>
-        <div className="flex items-center gap-2">
-          <select value={period} onChange={e => setPeriod(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none">
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={period} onChange={e => setPeriod(e.target.value)} className="border border-border rounded-lg px-3 py-2 text-sm focus:outline-none bg-white">
             <option value="today">Today</option>
             <option value="this_week">This Week</option>
             <option value="this_month">This Month</option>
+            <option value="this_quarter">This Quarter</option>
             <option value="this_year">This Year</option>
+            <option value="custom">Custom Range</option>
           </select>
-          <button onClick={exportToCSV} className="flex items-center gap-2 border border-border px-4 py-2 rounded-lg text-sm hover:bg-muted transition">
-            <Download className="w-4 h-4" />Export CSV
+          {period === 'custom' && (
+            <div className="flex items-center gap-1">
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-border rounded-lg px-2 py-1.5 text-sm focus:outline-none" />
+              <span className="text-muted-foreground">-</span>
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-border rounded-lg px-2 py-1.5 text-sm focus:outline-none" />
+            </div>
+          )}
+          <button onClick={loadReportData} className="flex items-center gap-1.5 border border-border px-3 py-2 rounded-lg text-sm hover:bg-muted transition">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={handlePrint} className="flex items-center gap-1.5 border border-border px-3 py-2 rounded-lg text-sm hover:bg-muted transition">
+            <Printer className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={exportToCSV} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            <Download className="w-4 h-4" />Export
           </button>
         </div>
       </div>
 
-      <div className="flex gap-1 bg-muted/50 p-1 rounded-xl w-fit">
+      <div className="flex gap-1 bg-muted/50 p-1 rounded-xl w-fit overflow-x-auto">
         {tabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as ReportTab)}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === tab.id ? 'bg-white text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap ${activeTab === tab.id ? 'bg-white text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
           >
             <tab.icon className="w-4 h-4" />
             {tab.label}
@@ -235,25 +268,38 @@ export default function ReportsPage() {
         ))}
       </div>
 
-      {/* KPI Summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="stat-card">
-          <p className="text-xs text-muted-foreground">Total Revenue</p>
-          <p className="text-xl font-bold text-foreground mt-1">{formatCurrency(stats.totalRevenue)}</p>
-          <p className="text-xs text-green-600 font-medium mt-0.5">{stats.totalOrders} orders</p>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs text-muted-foreground">Total Revenue</p>
+            <TrendingUp className="w-4 h-4 text-green-500" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{formatCurrency(stats.totalRevenue)}</p>
+          <p className="text-xs text-muted-foreground mt-1">{stats.totalOrders} orders</p>
         </div>
         <div className="stat-card">
-          <p className="text-xs text-muted-foreground">Total Purchases</p>
-          <p className="text-xl font-bold text-foreground mt-1">{formatCurrency(stats.totalPurchases)}</p>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs text-muted-foreground">Cost of Goods Sold</p>
+            <Package className="w-4 h-4 text-amber-500" />
+          </div>
+          <p className="text-2xl font-bold text-red-600">{formatCurrency(stats.cogsActual)}</p>
+          <p className="text-xs text-muted-foreground mt-1">{stats.totalRevenue > 0 ? ((stats.cogsActual / stats.totalRevenue) * 100).toFixed(1) : 0}% of revenue</p>
         </div>
         <div className="stat-card">
-          <p className="text-xs text-muted-foreground">Gross Profit</p>
-          <p className="text-xl font-bold text-green-600 mt-1">{formatCurrency(stats.grossProfit)}</p>
-          <p className="text-xs text-muted-foreground mt-0.5">{stats.totalRevenue > 0 ? ((stats.grossProfit / stats.totalRevenue) * 100).toFixed(1) : 0}% margin</p>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs text-muted-foreground">Gross Profit</p>
+            <BarChart3 className="w-4 h-4 text-blue-500" />
+          </div>
+          <p className="text-2xl font-bold text-green-600">{formatCurrency(stats.grossProfit)}</p>
+          <p className="text-xs font-medium mt-1">{stats.totalRevenue > 0 ? ((stats.grossProfit / stats.totalRevenue) * 100).toFixed(1) : 0}% margin</p>
         </div>
         <div className="stat-card">
-          <p className="text-xs text-muted-foreground">Net Profit (Est.)</p>
-          <p className="text-xl font-bold text-green-600 mt-1">{formatCurrency(stats.netProfit)}</p>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs text-muted-foreground">Inventory Value</p>
+            <Package className="w-4 h-4 text-purple-500" />
+          </div>
+          <p className="text-2xl font-bold text-foreground">{formatCurrency(stats.inventoryValue)}</p>
+          <p className="text-xs text-muted-foreground mt-1">{stats.totalProducts} products</p>
         </div>
       </div>
 
@@ -267,18 +313,17 @@ export default function ReportsPage() {
             <>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <div className="bg-white rounded-xl border border-border p-5 shadow-sm">
-                  <h3 className="text-sm font-semibold text-foreground mb-4">Sales vs Purchases vs Profit</h3>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={monthlyData} barSize={14} barGap={2}>
+                  <h3 className="text-sm font-semibold text-foreground mb-4">Sales vs Profit Trend</h3>
+                  <ResponsiveContainer width="100%" height={250}>
+                    <LineChart data={monthlyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                       <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={v => `৳${(v/100000).toFixed(0)}L`} />
+                      <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={v => `${(v/1000).toFixed(0)}K`} />
                       <Tooltip formatter={(v: number) => [formatCurrency(v), '']} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
-                      <Bar dataKey="sales" fill="#3b82f6" radius={[3, 3, 0, 0]} name="Sales" />
-                      <Bar dataKey="purchases" fill="#f59e0b" radius={[3, 3, 0, 0]} name="Purchases" />
-                      <Bar dataKey="profit" fill="#10b981" radius={[3, 3, 0, 0]} name="Profit" />
-                    </BarChart>
+                      <Line type="monotone" dataKey="sales" stroke="#3b82f6" strokeWidth={2} name="Sales" dot={false} />
+                      <Line type="monotone" dataKey="profit" stroke="#10b981" strokeWidth={2} name="Profit" dot={false} />
+                    </LineChart>
                   </ResponsiveContainer>
                 </div>
 
@@ -299,15 +344,15 @@ export default function ReportsPage() {
                           <div key={cat.name} className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-1.5">
                               <div className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.color }} />
-                              <span className="text-[11px] text-muted-foreground truncate">{cat.name}</span>
+                              <span className="text-xs text-muted-foreground truncate">{cat.name}</span>
                             </div>
-                            <span className="text-[11px] font-semibold text-foreground">{formatCurrency(cat.revenue)}</span>
+                            <span className="text-xs font-semibold text-foreground">{formatCurrency(cat.revenue)}</span>
                           </div>
                         ))}
                       </div>
                     </div>
                   ) : (
-                    <div className="text-center py-8 text-muted-foreground">No category data available</div>
+                    <div className="text-center py-8 text-muted-foreground text-sm">No category data available</div>
                   )}
                 </div>
               </div>
@@ -315,29 +360,29 @@ export default function ReportsPage() {
               <div className="table-wrapper">
                 <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-foreground">Top Selling Products</h3>
+                  <Link href="/reports/inventory" className="text-xs text-blue-600 hover:underline flex items-center gap-1">View Full Report <ArrowRight className="w-3 h-3" /></Link>
                 </div>
                 <table className="w-full">
                   <thead><tr className="bg-muted/40 border-b border-border">
-                    {['#', 'Product', 'Units Sold', 'Revenue', 'Margin'].map(h => <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-4 py-3">{h}</th>)}
+                    {['#', 'Product', 'Units Sold', 'Revenue', 'Cost', 'Profit', 'Margin'].map(h => <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-4 py-3">{h}</th>)}
                   </tr></thead>
                   <tbody className="divide-y divide-border">
-                    {topProducts.length > 0 ? topProducts.map((p, i) => (
+                    {topProducts.length > 0 ? topProducts.slice(0, 5).map((p, i) => (
                       <tr key={i} className="hover:bg-muted/30 transition-colors">
                         <td className="px-4 py-3 text-sm text-muted-foreground">{i + 1}</td>
                         <td className="px-4 py-3 text-sm font-semibold text-foreground">{p.name}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{p.sales}</td>
+                        <td className="px-4 py-3 text-sm text-foreground">{p.sales} <span className="text-muted-foreground text-xs">{p.unit || 'units'}</span></td>
                         <td className="px-4 py-3 text-sm font-semibold text-foreground">{formatCurrency(p.revenue)}</td>
+                        <td className="px-4 py-3 text-sm text-red-600">{formatCurrency(p.cost)}</td>
+                        <td className="px-4 py-3 text-sm font-semibold text-green-600">{formatCurrency(p.profit)}</td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-1.5 bg-muted rounded-full max-w-[80px]">
-                              <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min(p.revenue / stats.totalRevenue * 100 * 5, 80)}%` }} />
-                            </div>
-                            <span className="text-xs text-muted-foreground">{((p.revenue / (stats.totalRevenue || 1)) * 100).toFixed(1)}%</span>
-                          </div>
+                          <span className={`text-xs font-medium ${p.profit > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {p.revenue > 0 ? ((p.profit / p.revenue) * 100).toFixed(1) : 0}%
+                          </span>
                         </td>
                       </tr>
                     )) : (
-                      <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No product sales data</td></tr>
+                      <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground text-sm">No product sales data</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -353,21 +398,21 @@ export default function ReportsPage() {
                   <BarChart data={monthlyData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                     <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={v => `৳${(v/100000).toFixed(0)}L`} />
+                    <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={v => `${(v/1000).toFixed(0)}K`} />
                     <Tooltip formatter={(v: number) => [formatCurrency(v), '']} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
                     <Bar dataKey="sales" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Sales" />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
               <div className="bg-white rounded-xl border border-border p-5 shadow-sm">
-                <h3 className="text-sm font-semibold text-foreground mb-4">Monthly Profit</h3>
+                <h3 className="text-sm font-semibold text-foreground mb-4">Profit Margin Trend</h3>
                 <ResponsiveContainer width="100%" height={280}>
                   <BarChart data={monthlyData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                     <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={v => `৳${(v/100000).toFixed(0)}L`} />
+                    <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={v => `${(v/1000).toFixed(0)}K`} />
                     <Tooltip formatter={(v: number) => [formatCurrency(v), '']} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-                    <Bar dataKey="profit" fill="#10b981" radius={[4, 4, 0, 0]} name="Profit" />
+                    <Bar dataKey="profit" fill="#10b981" radius={[4, 4, 0, 0]} name="Gross Profit" />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -376,22 +421,27 @@ export default function ReportsPage() {
 
           {activeTab === 'inventory' && (
             <div className="table-wrapper">
-              <div className="px-4 py-3 border-b border-border">
-                <h3 className="text-sm font-semibold text-foreground">Top Selling Products</h3>
+              <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-foreground">Top Products by Revenue</h3>
+                <Link href="/reports/inventory" className="text-xs text-blue-600 hover:underline flex items-center gap-1">Full Inventory Report <ArrowRight className="w-3 h-3" /></Link>
               </div>
               <table className="w-full">
                 <thead><tr className="bg-muted/40 border-b border-border">
-                  {['#', 'Product', 'Units Sold', 'Revenue', 'Margin'].map(h => <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-4 py-3">{h}</th>)}
+                  {['#', 'Product', 'Units Sold', 'Revenue', 'Cost', 'Profit', 'Margin'].map(h => <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-4 py-3">{h}</th>)}
                 </tr></thead>
                 <tbody className="divide-y divide-border">
                   {topProducts.map((p, i) => (
                     <tr key={i} className="hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 text-sm text-muted-foreground">{i + 1}</td>
                       <td className="px-4 py-3 text-sm font-semibold text-foreground">{p.name}</td>
-                      <td className="px-4 py-3 text-sm text-foreground">{p.sales}</td>
+                      <td className="px-4 py-3 text-sm text-foreground">{p.sales} <span className="text-muted-foreground text-xs">{p.unit || 'units'}</span></td>
                       <td className="px-4 py-3 text-sm font-semibold text-foreground">{formatCurrency(p.revenue)}</td>
+                      <td className="px-4 py-3 text-sm text-red-600">{formatCurrency(p.cost)}</td>
+                      <td className="px-4 py-3 text-sm font-semibold text-green-600">{formatCurrency(p.profit)}</td>
                       <td className="px-4 py-3">
-                        <span className="text-xs text-muted-foreground">{((p.revenue / (stats.totalRevenue || 1)) * 100).toFixed(1)}%</span>
+                        <span className={`text-xs font-medium ${p.profit > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {p.revenue > 0 ? ((p.profit / p.revenue) * 100).toFixed(1) : 0}%
+                        </span>
                       </td>
                     </tr>
                   ))}
@@ -407,7 +457,7 @@ export default function ReportsPage() {
               </div>
               <table className="w-full">
                 <thead><tr className="bg-muted/40 border-b border-border">
-                  {['#', 'Customer', 'Total Purchases'].map(h => <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-4 py-3">{h}</th>)}
+                  {['#', 'Customer', 'Total Revenue'].map(h => <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-4 py-3">{h}</th>)}
                 </tr></thead>
                 <tbody className="divide-y divide-border">
                   {topCustomers.map((c, i) => (
@@ -423,35 +473,58 @@ export default function ReportsPage() {
           )}
 
           {activeTab === 'pl' && (
-            <div className="bg-white rounded-xl border border-border p-6 shadow-sm">
-              <h3 className="text-sm font-semibold text-foreground mb-6">Profit & Loss Statement</h3>
+            <div className="bg-white rounded-xl border border-border p-6 shadow-sm max-w-3xl mx-auto">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-bold text-foreground">Profit & Loss Statement</h3>
+                <Link href="/reports/pl" className="text-xs text-blue-600 hover:underline flex items-center gap-1">Detailed P&L <ArrowRight className="w-3 h-3" /></Link>
+              </div>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4 border-b border-border pb-4">
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">Gross Revenue</p>
                     <p className="text-2xl font-bold text-green-600">{formatCurrency(stats.totalRevenue)}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{stats.totalOrders} orders this period</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">Cost of Goods Sold</p>
-                    <p className="text-2xl font-bold text-red-600">{formatCurrency(stats.totalPurchases)}</p>
+                    <p className="text-2xl font-bold text-red-600">({formatCurrency(stats.cogsActual)})</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{stats.totalRevenue > 0 ? ((stats.cogsActual / stats.totalRevenue) * 100).toFixed(1) : 0}% of revenue</p>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4 border-b border-border pb-4">
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Gross Profit</p>
-                    <p className="text-xl font-bold text-blue-600">{formatCurrency(stats.grossProfit)}</p>
-                    <p className="text-xs text-muted-foreground">{((stats.grossProfit / (stats.totalRevenue || 1)) * 100).toFixed(1)}% margin</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Operating Expenses (Est.)</p>
-                    <p className="text-xl font-bold text-red-600">{formatCurrency(stats.grossProfit * 0.23)}</p>
-                    <p className="text-xs text-muted-foreground">23% of gross profit</p>
+                <div className="border-b border-border pb-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1">Gross Profit</p>
+                      <p className="text-xl font-bold text-blue-600">{formatCurrency(stats.grossProfit)}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-bold text-blue-600">{stats.totalRevenue > 0 ? ((stats.grossProfit / stats.totalRevenue) * 100).toFixed(1) : 0}%</p>
+                      <p className="text-xs text-muted-foreground">gross margin</p>
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Net Profit</p>
-                  <p className="text-3xl font-bold text-green-600">{formatCurrency(stats.netProfit)}</p>
-                  <p className="text-xs text-muted-foreground">{((stats.netProfit / (stats.totalRevenue || 1)) * 100).toFixed(1)}% net margin</p>
+                <div className="border-b border-border pb-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1">Operating Expenses (Est.)</p>
+                      <p className="text-lg font-bold text-red-600">({formatCurrency(stats.grossProfit * 0.15)})</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-muted-foreground">~15% of gross profit</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-slate-50 rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground mb-1">Net Profit (Est.)</p>
+                      <p className="text-3xl font-bold text-green-600">{formatCurrency(stats.netProfit)}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xl font-bold text-green-600">{stats.totalRevenue > 0 ? ((stats.netProfit / stats.totalRevenue) * 100).toFixed(1) : 0}%</p>
+                      <p className="text-xs text-muted-foreground">net margin</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
