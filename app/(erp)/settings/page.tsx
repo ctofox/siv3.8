@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { toast } from '@/hooks/use-toast';
-import { Settings, User, Bell, Shield, Palette, Building2, Save, Database, RefreshCw, Trash2, Download, AlertTriangle, Package, FileText, ShoppingCart, Truck, ClipboardList, BookOpen, CheckCircle2, Loader2, X } from 'lucide-react';
+import { Settings, User, Bell, Shield, Palette, Building2, Save, Database, RefreshCw, Trash2, Download, TriangleAlert as AlertTriangle, Package, FileText, ShoppingCart, Truck, ClipboardList, BookOpen, CircleCheck as CheckCircle2, Loader as Loader2, X } from 'lucide-react';
 
 type SettingsTab = 'general' | 'profile' | 'notifications' | 'security' | 'appearance' | 'data';
 
@@ -55,6 +55,8 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [backupLoading, setBackupLoading] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
+  const [restoreResult, setRestoreResult] = useState<{ success: boolean; stats: any; errors?: string[] } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleteCounts, setDeleteCounts] = useState<Record<string, number>>({});
 
@@ -146,6 +148,41 @@ export default function SettingsPage() {
       toast({ title: 'Backup Failed', description: err.message, variant: 'destructive' });
     } finally {
       setBackupLoading(false);
+    }
+  }
+
+  async function handleRestoreUpload(file: File) {
+    setRestoreLoading(true);
+    setRestoreResult(null);
+    try {
+      const text = await file.text();
+      let backup: any;
+      try { backup = JSON.parse(text); } catch { throw new Error('File is not valid JSON'); }
+      if (!backup.data && !backup.database?.tables) throw new Error('Unrecognized backup format. Expected a backup created by this system.');
+      const { data: { session } } = await supabase.auth.getSession();
+      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/db-restore`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session?.access_token || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
+          'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(backup),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Restore failed');
+      setRestoreResult(result);
+      if (result.success) {
+        toast({ title: 'Restore Complete', description: `${result.stats.total_rows_inserted.toLocaleString()} rows restored across ${result.stats.tables_restored} tables` });
+        await loadDeleteCounts();
+      } else {
+        toast({ title: 'Restore Partial', description: `${result.stats.tables_failed} tables had errors`, variant: 'destructive' });
+      }
+    } catch (err: any) {
+      toast({ title: 'Restore Failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setRestoreLoading(false);
     }
   }
 
@@ -677,6 +714,53 @@ export default function SettingsPage() {
                       {backupLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                       {backupLoading ? 'Preparing backup...' : 'Download Full Backup (.json)'}
                     </button>
+                  </div>
+                </div>
+
+                {/* ── RESTORE SECTION ── */}
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 overflow-hidden">
+                  <div className="px-5 py-4 border-b border-emerald-100">
+                    <div className="flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 text-emerald-600" />
+                      <h3 className="text-sm font-bold text-emerald-800">Restore from Backup</h3>
+                    </div>
+                    <p className="text-xs text-emerald-700 mt-1">Upload a JSON backup file to restore all data. Existing data will be replaced. This cannot be undone.</p>
+                  </div>
+                  <div className="px-5 py-4 space-y-3">
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+                      <p className="font-semibold">Before restoring:</p>
+                      <ul className="list-disc list-inside mt-1 space-y-0.5">
+                        <li>Download a fresh backup first in case you need to roll back</li>
+                        <li>Only backups created by this system are supported</li>
+                        <li>All existing data will be replaced with the backup data</li>
+                      </ul>
+                    </div>
+                    <label className={`flex flex-col items-center justify-center gap-2 w-full border-2 border-dashed rounded-xl p-6 cursor-pointer transition ${
+                      restoreLoading ? 'border-emerald-200 bg-emerald-50 cursor-not-allowed' : 'border-emerald-300 hover:bg-emerald-50 hover:border-emerald-400'
+                    }`}>
+                      {restoreLoading ? (
+                        <><Loader2 className="w-7 h-7 text-emerald-500 animate-spin" /><p className="text-sm font-semibold text-emerald-700">Restoring data, please wait...</p></>
+                      ) : (
+                        <><Download className="w-7 h-7 text-emerald-400 rotate-180" /><p className="text-sm font-semibold text-emerald-700">Click to upload backup file</p><p className="text-xs text-emerald-500">.json files only</p></>
+                      )}
+                      <input type="file" accept=".json,application/json" className="hidden" disabled={restoreLoading}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) handleRestoreUpload(f); e.target.value = ''; }}
+                      />
+                    </label>
+                    {restoreResult && (
+                      <div className={`p-3 rounded-lg border text-xs space-y-1.5 ${
+                        restoreResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
+                      }`}>
+                        <p className="font-semibold flex items-center gap-1.5">
+                          {restoreResult.success ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                          {restoreResult.success ? 'Restore successful' : 'Restore completed with errors'}
+                        </p>
+                        <p>{restoreResult.stats.total_rows_inserted.toLocaleString()} rows restored &mdash; {restoreResult.stats.tables_restored} tables OK, {restoreResult.stats.tables_failed} failed</p>
+                        {restoreResult.errors && restoreResult.errors.length > 0 && (
+                          <ul className="list-disc list-inside space-y-0.5">{restoreResult.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
